@@ -154,7 +154,7 @@ func (scope *Scope) handleHasOnePreload(field *Field, conditions []interface{}, 
 	preloadDB, preloadConditions := scope.generatePreloadDBWithConditions(conditions)
 
 	subQuerySQL := parentQuery.expr
-	subQuerySQL = "SELECT " + toQueryCondition(scope, relation.AssociationForeignDBNames) + " FROM (" + subQuerySQL + ") " + scope.Quote("preHO_" + field.DBName)
+	subQuerySQL = "SELECT " + toQueryCondition(scope, relation.AssociationForeignDBNames) + " FROM (" + subQuerySQL + ") " + scope.Quote("HO_" + field.DBName)
 
 	// find relations
 	query := fmt.Sprintf("%v IN (%v)", toQueryCondition(scope, relation.ForeignDBNames), subQuerySQL)
@@ -210,7 +210,7 @@ func (scope *Scope) handleHasManyPreload(field *Field, conditions []interface{},
 	preloadDB, preloadConditions := scope.generatePreloadDBWithConditions(conditions)
 
 	subQuerySQL := parentSql.expr
-	subQuerySQL = "SELECT " + toQueryCondition(scope, relation.AssociationForeignDBNames) + " FROM (" + subQuerySQL + ") " + scope.Quote("preHM_" + field.DBName)
+	subQuerySQL = "SELECT " + toQueryCondition(scope, relation.AssociationForeignDBNames) + " FROM (" + subQuerySQL + ") " + scope.Quote("HM_" + field.DBName)
 
 	// find relations
 	query := fmt.Sprintf("%v IN (%v)", toQueryCondition(scope, relation.ForeignDBNames), subQuerySQL)
@@ -267,7 +267,7 @@ func (scope *Scope) handleBelongsToPreload(field *Field, conditions []interface{
 	}
 
 	subQuerySQL := parentSQL.expr
-	subQuerySQL = "SELECT " + toQueryCondition(scope, relation.ForeignDBNames) + " FROM (" + subQuerySQL + ") " + scope.Quote("preBT_" + field.DBName)
+	subQuerySQL = "SELECT " + toQueryCondition(scope, relation.ForeignDBNames) + " FROM (" + subQuerySQL + ") " + scope.Quote("BT_" + field.DBName)
 
 	// find relations
 	results := makeSlice(field.Struct.Type)
@@ -339,7 +339,7 @@ func (scope *Scope) handleManyToManyPreload(field *Field, conditions []interface
 	}
 
 	subQuerySQL := parentSql
-	subQuerySQL.expr = "SELECT " + toQueryCondition(scope, relation.ForeignDBNames) + " FROM (" + subQuerySQL.expr + ") " + scope.Quote("preMM_" + field.DBName)
+	subQuerySQL.expr = "SELECT " + toQueryCondition(scope, relation.ForeignDBNames) + " FROM (" + subQuerySQL.expr + ") " + scope.Quote("MM_" + field.DBName)
 	preloadDB = joinTableHandler.JoinWithQuery(joinTableHandler, preloadDB, scope.Value, subQuerySQL)
 
 	// preload inline conditions
