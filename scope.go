@@ -1323,6 +1323,23 @@ func (scope *Scope) autoIndex() *Scope {
 	return scope
 }
 
+func (scope *Scope) hasElements(values ...interface{}) bool {
+	for _, value := range values {
+		indirectValue := indirect(reflect.ValueOf(value))
+
+		switch indirectValue.Kind() {
+		case reflect.Slice:
+			hasValue := true
+			var object = indirect(indirectValue)
+			if object.Kind() == reflect.Slice && object.Len() == 0 {
+				hasValue = false
+			}
+			return hasValue
+		}
+	}
+	return true
+}
+
 func (scope *Scope) getColumnAsArray(columns []string, values ...interface{}) (results [][]interface{}) {
 	resultMap := make(map[string][]interface{})
 	for _, value := range values {

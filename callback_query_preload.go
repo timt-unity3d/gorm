@@ -147,7 +147,12 @@ func (scope *Scope) handleHasOnePreload(field *Field, conditions []interface{}, 
 
 	// skip query if parent does not exist
 	if scope.Value == nil {
-		return nil
+		return parentQuery
+	}
+
+	// skip query if parent has no rows
+	if !scope.hasElements(scope.Value) {
+		return parentQuery
 	}
 
 	// preload conditions
@@ -203,7 +208,12 @@ func (scope *Scope) handleHasManyPreload(field *Field, conditions []interface{},
 
 	// skip query if parent does not exist
 	if scope.Value == nil {
-		return nil
+		return parentSql
+	}
+
+	// skip query if parent has no rows
+	if !scope.hasElements(scope.Value) {
+		return parentSql
 	}
 
 	// preload conditions
@@ -261,9 +271,13 @@ func (scope *Scope) handleBelongsToPreload(field *Field, conditions []interface{
 	// preload conditions
 	preloadDB, preloadConditions := scope.generatePreloadDBWithConditions(conditions)
 
-	// get relations's primary keys
-	if scope.Value == nil {
-		return nil
+	if scope.Value == nil{
+		return parentSQL
+	}
+
+	// skip query if parent has no rows
+	if !scope.hasElements(scope.Value) {
+		return parentSQL
 	}
 
 	subQuerySQL := parentSQL.expr
@@ -316,6 +330,11 @@ func (scope *Scope) handleManyToManyPreload(field *Field, conditions []interface
 		linkHash         = map[string][]reflect.Value{}
 		isPtr            bool
 	)
+
+	// skip query if parent has no rows
+	if !scope.hasElements(scope.Value) {
+		return parentSql
+	}
 
 	if fieldType.Kind() == reflect.Ptr {
 		isPtr = true
