@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+
 // preloadCallback used to preload associations
 func preloadCallback(scope *Scope) {
 	if _, skip := scope.InstanceGet("gorm:skip_query_callback"); skip {
@@ -30,6 +31,7 @@ func preloadCallback(scope *Scope) {
 
 	var (
 		preloadedMap = map[string]bool{}
+		parentQueryMap = map[string]*SqlExpr{}
 		fields       = scope.Fields()
 	)
 
@@ -39,6 +41,10 @@ func preloadCallback(scope *Scope) {
 			currentScope  = scope
 			currentFields = fields
 		)
+		parentQuery := new(SqlExpr)
+		parentQuery.expr = currentScope.SQL
+		parentQuery.args = currentScope.SQLVars
+		cleanParentSql(parentQuery)
 
 		for idx, preloadField := range preloadFields {
 			var currentPreloadConditions []interface{}
@@ -49,6 +55,11 @@ func preloadCallback(scope *Scope) {
 
 			// if not preloaded
 			if preloadKey := strings.Join(preloadFields[:idx+1], "."); !preloadedMap[preloadKey] {
+				parentKey := strings.Join(preloadFields[:idx], ".")
+				if _, ok := parentQueryMap[parentKey]; ok {
+					parentQuery = cleanParentSql(parentQueryMap[parentKey])
+				}
+
 
 				// assign search conditions to last preload
 				if idx == len(preloadFields)-1 {
@@ -62,13 +73,13 @@ func preloadCallback(scope *Scope) {
 
 					switch field.Relationship.Kind {
 					case "has_one":
-						currentScope.handleHasOnePreload(field, currentPreloadConditions)
+						parentQueryMap[preloadKey] = currentScope.handleHasOnePreload(field, currentPreloadConditions, parentQuery)
 					case "has_many":
-						currentScope.handleHasManyPreload(field, currentPreloadConditions)
+						parentQueryMap[preloadKey] = currentScope.handleHasManyPreload(field, currentPreloadConditions, parentQuery)
 					case "belongs_to":
-						currentScope.handleBelongsToPreload(field, currentPreloadConditions)
+						parentQueryMap[preloadKey] = currentScope.handleBelongsToPreload(field, currentPreloadConditions, parentQuery)
 					case "many_to_many":
-						currentScope.handleManyToManyPreload(field, currentPreloadConditions)
+						parentQueryMap[preloadKey] = currentScope.handleManyToManyPreload(field, currentPreloadConditions, parentQuery)
 					default:
 						scope.Err(errors.New("unsupported relation"))
 					}
@@ -131,28 +142,36 @@ func (scope *Scope) generatePreloadDBWithConditions(conditions []interface{}) (*
 }
 
 // handleHasOnePreload used to preload has one associations
-func (scope *Scope) handleHasOnePreload(field *Field, conditions []interface{}) {
+func (scope *Scope) handleHasOnePreload(field *Field, conditions []interface{}, parentQuery *SqlExpr) *SqlExpr  {
 	relation := field.Relationship
 
-	// get relations's primary keys
-	primaryKeys := scope.getColumnAsArray(relation.AssociationForeignFieldNames, scope.Value)
-	if len(primaryKeys) == 0 {
-		return
+	// skip query if parent does not exist
+	if scope.Value == nil {
+		return parentQuery
+	}
+
+	// skip query if parent has no rows
+	if !scope.hasElements(scope.Value) {
+		return parentQuery
 	}
 
 	// preload conditions
 	preloadDB, preloadConditions := scope.generatePreloadDBWithConditions(conditions)
 
+	subQuerySQL := parentQuery.expr
+	subQuerySQL = "SELECT " + toQueryCondition(scope, relation.AssociationForeignDBNames) + " FROM (" + subQuerySQL + ") " + scope.Quote("HO_" + field.DBName)
+
 	// find relations
-	query := fmt.Sprintf("%v IN (%v)", toQueryCondition(scope, relation.ForeignDBNames), toQueryMarks(primaryKeys))
-	values := toQueryValues(primaryKeys)
+	query := fmt.Sprintf("%v IN (%v)", toQueryCondition(scope, relation.ForeignDBNames), subQuerySQL)
+	values := parentQuery.args
 	if relation.PolymorphicType != "" {
 		query += fmt.Sprintf(" AND %v = ?", scope.Quote(relation.PolymorphicDBName))
 		values = append(values, relation.PolymorphicValue)
 	}
 
 	results := makeSlice(field.Struct.Type)
-	scope.Err(preloadDB.Where(query, values...).Find(results, preloadConditions...).Error)
+	preloadQuery := preloadDB.Model(results).Where(query, values...)
+	scope.Err(preloadQuery.Find(results, preloadConditions...).Error)
 
 	// assign find results
 	var (
@@ -180,31 +199,40 @@ func (scope *Scope) handleHasOnePreload(field *Field, conditions []interface{}) 
 			scope.Err(field.Set(result))
 		}
 	}
+	return preloadQuery.QueryExpr()
 }
 
 // handleHasManyPreload used to preload has many associations
-func (scope *Scope) handleHasManyPreload(field *Field, conditions []interface{}) {
+func (scope *Scope) handleHasManyPreload(field *Field, conditions []interface{}, parentSql *SqlExpr) *SqlExpr {
 	relation := field.Relationship
 
-	// get relations's primary keys
-	primaryKeys := scope.getColumnAsArray(relation.AssociationForeignFieldNames, scope.Value)
-	if len(primaryKeys) == 0 {
-		return
+	// skip query if parent does not exist
+	if scope.Value == nil {
+		return parentSql
+	}
+
+	// skip query if parent has no rows
+	if !scope.hasElements(scope.Value) {
+		return parentSql
 	}
 
 	// preload conditions
 	preloadDB, preloadConditions := scope.generatePreloadDBWithConditions(conditions)
 
+	subQuerySQL := parentSql.expr
+	subQuerySQL = "SELECT " + toQueryCondition(scope, relation.AssociationForeignDBNames) + " FROM (" + subQuerySQL + ") " + scope.Quote("HM_" + field.DBName)
+
 	// find relations
-	query := fmt.Sprintf("%v IN (%v)", toQueryCondition(scope, relation.ForeignDBNames), toQueryMarks(primaryKeys))
-	values := toQueryValues(primaryKeys)
+	query := fmt.Sprintf("%v IN (%v)", toQueryCondition(scope, relation.ForeignDBNames), subQuerySQL)
+	values := parentSql.args
 	if relation.PolymorphicType != "" {
 		query += fmt.Sprintf(" AND %v = ?", scope.Quote(relation.PolymorphicDBName))
 		values = append(values, relation.PolymorphicValue)
 	}
 
 	results := makeSlice(field.Struct.Type)
-	scope.Err(preloadDB.Where(query, values...).Find(results, preloadConditions...).Error)
+	preloadQuery := preloadDB.Model(results).Where(query, values...)
+	scope.Err(preloadQuery.Find(results, preloadConditions...).Error)
 
 	// assign find results
 	var (
@@ -233,24 +261,32 @@ func (scope *Scope) handleHasManyPreload(field *Field, conditions []interface{})
 	} else {
 		scope.Err(field.Set(resultsValue))
 	}
+	return preloadQuery.QueryExpr()
 }
 
 // handleBelongsToPreload used to preload belongs to associations
-func (scope *Scope) handleBelongsToPreload(field *Field, conditions []interface{}) {
+func (scope *Scope) handleBelongsToPreload(field *Field, conditions []interface{}, parentSQL *SqlExpr) *SqlExpr {
 	relation := field.Relationship
 
 	// preload conditions
 	preloadDB, preloadConditions := scope.generatePreloadDBWithConditions(conditions)
 
-	// get relations's primary keys
-	primaryKeys := scope.getColumnAsArray(relation.ForeignFieldNames, scope.Value)
-	if len(primaryKeys) == 0 {
-		return
+	if scope.Value == nil{
+		return parentSQL
 	}
+
+	// skip query if parent has no rows
+	if !scope.hasElements(scope.Value) {
+		return parentSQL
+	}
+
+	subQuerySQL := parentSQL.expr
+	subQuerySQL = "SELECT " + toQueryCondition(scope, relation.ForeignDBNames) + " FROM (" + subQuerySQL + ") " + scope.Quote("BT_" + field.DBName)
 
 	// find relations
 	results := makeSlice(field.Struct.Type)
-	scope.Err(preloadDB.Where(fmt.Sprintf("%v IN (%v)", toQueryCondition(scope, relation.AssociationForeignDBNames), toQueryMarks(primaryKeys)), toQueryValues(primaryKeys)...).Find(results, preloadConditions...).Error)
+	preloadQuery := preloadDB.Model(results).Where(fmt.Sprintf("%v IN (%v)", toQueryCondition(scope, relation.AssociationForeignDBNames), subQuerySQL),parentSQL.args)
+	scope.Err(preloadQuery.Find(results, preloadConditions...).Error)
 
 	// assign find results
 	var (
@@ -280,10 +316,11 @@ func (scope *Scope) handleBelongsToPreload(field *Field, conditions []interface{
 			scope.Err(field.Set(result))
 		}
 	}
+	return preloadQuery.QueryExpr()
 }
 
 // handleManyToManyPreload used to preload many to many associations
-func (scope *Scope) handleManyToManyPreload(field *Field, conditions []interface{}) {
+func (scope *Scope) handleManyToManyPreload(field *Field, conditions []interface{}, parentSql *SqlExpr) *SqlExpr {
 	var (
 		relation         = field.Relationship
 		joinTableHandler = relation.JoinTableHandler
@@ -293,6 +330,11 @@ func (scope *Scope) handleManyToManyPreload(field *Field, conditions []interface
 		linkHash         = map[string][]reflect.Value{}
 		isPtr            bool
 	)
+
+	// skip query if parent has no rows
+	if !scope.hasElements(scope.Value) {
+		return parentSql
+	}
 
 	if fieldType.Kind() == reflect.Ptr {
 		isPtr = true
@@ -315,7 +357,9 @@ func (scope *Scope) handleManyToManyPreload(field *Field, conditions []interface
 		preloadDB = preloadDB.Select("*")
 	}
 
-	preloadDB = joinTableHandler.JoinWith(joinTableHandler, preloadDB, scope.Value)
+	subQuerySQL := parentSql
+	subQuerySQL.expr = "SELECT " + toQueryCondition(scope, relation.ForeignDBNames) + " FROM (" + subQuerySQL.expr + ") " + scope.Quote("MM_" + field.DBName)
+	preloadDB = joinTableHandler.JoinWithQuery(joinTableHandler, preloadDB, scope.Value, subQuerySQL)
 
 	// preload inline conditions
 	if len(preloadConditions) > 0 {
@@ -325,7 +369,7 @@ func (scope *Scope) handleManyToManyPreload(field *Field, conditions []interface
 	rows, err := preloadDB.Rows()
 
 	if scope.Err(err) != nil {
-		return
+		return nil
 	}
 	defer rows.Close()
 
@@ -407,4 +451,5 @@ func (scope *Scope) handleManyToManyPreload(field *Field, conditions []interface
 			f.Set(v)
 		}
 	}
+	return preloadDB.QueryExpr()
 }
